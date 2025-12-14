@@ -1,0 +1,25 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build output
+*.out
+bin/
+dist/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Go test cache
+*.test
+
+# IDEs
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
