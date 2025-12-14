@@ -21,6 +21,17 @@ type Config struct {
 	SigningSecret  []byte
 	SignedURLTTL   time.Duration
 	ProcessingPool int
+	DatabaseURL    string
+	RedisAddr      string
+	RedisPassword  string
+	RedisDB        int
+	S3Endpoint     string
+	S3AccessKey    string
+	S3SecretKey    string
+	S3UseSSL       bool
+	S3Region       string
+	RawBucket      string
+	ProcessedBucket string
 }
 
 const (
@@ -31,6 +42,13 @@ const (
 	defaultAllowedTypes = "application/pdf,image/png,image/jpeg,text/plain"
 	defaultSignedTTL    = 5 * time.Minute
 	defaultWorkerCount  = 2
+	defaultDatabaseURL  = "postgres://vaultdrop:vaultdrop@localhost:5432/vaultdrop?sslmode=disable"
+	defaultRedisAddr    = "localhost:6379"
+	defaultRedisDB      = 0
+	defaultS3Endpoint   = "localhost:9000"
+	defaultS3Region     = ""
+	defaultRawBucket    = "vaultdrop-raw"
+	defaultProcessedBucket = "vaultdrop-processed"
 )
 
 // Load reads configuration from environment variables falling back to defaults.
@@ -45,6 +63,17 @@ func Load() (*Config, error) {
 		SigningSecret:  parseSecret("VAULTDROP_SIGNING_SECRET"),
 		SignedURLTTL:   parseDuration("VAULTDROP_SIGNED_TTL", defaultSignedTTL),
 		ProcessingPool: parseInt("VAULTDROP_WORKERS", defaultWorkerCount),
+		DatabaseURL:    readEnv("VAULTDROP_DATABASE_URL", defaultDatabaseURL),
+		RedisAddr:      readEnv("VAULTDROP_REDIS_ADDR", defaultRedisAddr),
+		RedisPassword:  readEnv("VAULTDROP_REDIS_PASSWORD", ""),
+		RedisDB:        parseInt("VAULTDROP_REDIS_DB", defaultRedisDB),
+		S3Endpoint:     readEnv("VAULTDROP_S3_ENDPOINT", defaultS3Endpoint),
+		S3AccessKey:    readEnv("VAULTDROP_S3_ACCESS_KEY", "minioadmin"),
+		S3SecretKey:    readEnv("VAULTDROP_S3_SECRET_KEY", "minioadmin"),
+		S3UseSSL:       parseBool("VAULTDROP_S3_USE_SSL", false),
+		S3Region:       readEnv("VAULTDROP_S3_REGION", defaultS3Region),
+		RawBucket:      readEnv("VAULTDROP_S3_RAW_BUCKET", defaultRawBucket),
+		ProcessedBucket: readEnv("VAULTDROP_S3_PROCESSED_BUCKET", defaultProcessedBucket),
 	}
 	if cfg.SigningSecret == nil {
 		// If no secret was supplied we generate one using crypto/rand.
@@ -95,6 +124,15 @@ func parseInt64(key string, def int64) int64 {
 func parseInt(key string, def int) int {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil {
+			return parsed
+		}
+	}
+	return def
+}
+
+func parseBool(key string, def bool) bool {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
 			return parsed
 		}
 	}

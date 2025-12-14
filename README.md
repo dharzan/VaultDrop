@@ -1,96 +1,130 @@
 # VaultDrop
 
-VaultDrop is a lightweight Go service that demonstrates how to securely accept and process streamed file uploads. It validates file size/type, simulates an anti-virus scan, pushes the upload onto a background processing queue, and exposes short-lived signed download URLs.
+VaultDrop now operates as a full PDF text extraction pipeline: the API streams uploads into MinIO, enqueues background jobs through Redis/Asynq, a worker extracts text from PDFs, stores the structured output in Postgres, and publishes processed `.txt` artifacts back to MinIO. Everything runs with a single `docker compose up`.
 
-## Features
+## What’s inside
 
-- **Streaming uploads** – multipart file data is streamed directly to disk with strict byte limits to avoid buffering in memory.
-- **File validation** – configurable allowed MIME types plus maximum file size checks.
-- **Virus scan simulation** – each upload is scanned for a dummy signature before it is accepted.
-- **Background processing** – a worker pool dequeues uploads and marks them as processed.
-- **Signed URLs** – requesters can mint HMAC-based signed download URLs with configurable TTLs.
+- **cmd/api** – HTTP service that validates uploads, stores PDFs, inserts metadata, and enqueues extraction jobs.
+- **cmd/worker** – Asynq worker that downloads PDFs from MinIO, extracts text via `ledongthuc/pdf`, stores the text to Postgres, and uploads `.txt` results.
+- **Postgres** – Persists document metadata, status, extracted text, and error messages.
+- **Redis + Asynq** – Lightweight job queue for background extraction.
+- **MinIO** – S3-compatible object storage that holds both raw and processed artifacts.
 
-## Getting Started
+Legacy demo code (`cmd/server` and related packages) still exists for reference but the docker-compose stack exercises the new architecture.
 
-1. Ensure Go 1.21+ is installed.
-2. Clone the repository and start the server:
+## Quick start (one command demo)
 
 ```bash
-go run ./cmd/server
+docker compose up --build
 ```
 
-Environment variables (all optional):
+Services started locally:
+
+- API: http://localhost:8080
+- Postgres: localhost:5432 (`vaultdrop` / `vaultdrop`)
+- Redis: localhost:6379
+- MinIO S3 API: http://localhost:9000 (console: http://localhost:9001)
+
+The containers automatically provision buckets/tables on boot. Stop everything with `Ctrl+C`.
+
+## Upload & processing flow
+
+1. Upload a PDF (only `application/pdf` is accepted):
+
+   ```bash
+   curl -F "file=@resume.pdf" http://localhost:8080/documents
+   # => {"id":"<uuid>","status":"queued"}
+   ```
+
+2. Poll the document to track status (`queued` → `processing` → `completed`):
+
+   ```
+   GET /documents/{id}
+   ```
+
+3. Retrieve the extracted text directly:
+
+   ```
+   GET /documents/{id}/text
+   ```
+
+4. Or request a short-lived signed URL to download the `.txt` artifact stored in MinIO:
+
+   ```
+   GET /documents/{id}/processed-url
+   ```
+
+## API surface
+
+| Method + Path | Description |
+| --- | --- |
+| `GET /healthz` | Service heartbeat |
+| `POST /documents` | Multipart upload (`file` field) of a PDF |
+| `GET /documents/{id}` | Metadata: filename, status, timestamps, error info |
+| `GET /documents/{id}/text` | Raw extracted text (200 when complete, 202 otherwise) |
+| `GET /documents/{id}/processed-url` | Signed URL pointing at the processed `.txt` object in MinIO |
+
+## Configuration
+
+The API/worker share the same env vars (defaults shown):
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `VAULTDROP_ADDRESS` | HTTP listen address | `:8080` |
-| `VAULTDROP_MAX_FILE_BYTES` | Maximum allowed upload size | `26214400` (25 MiB) |
-| `VAULTDROP_ALLOWED_TYPES` | Comma-separated list of allowed MIME types | `application/pdf,image/png,image/jpeg,text/plain` |
-| `VAULTDROP_SIGNING_SECRET` | HMAC secret used for signed URLs | randomly generated per process |
-| `VAULTDROP_SIGNED_TTL` | Duration before signed URLs expire | `5m` |
-| `VAULTDROP_WORKERS` | Background processor workers | `2` |
+| `VAULTDROP_ADDRESS` | API listen address | `:8080` |
+| `VAULTDROP_MAX_FILE_BYTES` | Maximum upload size | `26214400` (25 MiB) |
+| `VAULTDROP_ALLOWED_TYPES` | Allowed MIME types | `application/pdf,image/png,image/jpeg,text/plain` |
+| `VAULTDROP_DATABASE_URL` | Postgres DSN | `postgres://vaultdrop:vaultdrop@localhost:5432/vaultdrop?sslmode=disable` |
+| `VAULTDROP_REDIS_ADDR` | Redis host:port | `localhost:6379` |
+| `VAULTDROP_REDIS_DB` | Redis DB index | `0` |
+| `VAULTDROP_S3_ENDPOINT` | MinIO/S3 endpoint | `localhost:9000` |
+| `VAULTDROP_S3_ACCESS_KEY` | S3 access key | `minioadmin` |
+| `VAULTDROP_S3_SECRET_KEY` | S3 secret key | `minioadmin` |
+| `VAULTDROP_S3_RAW_BUCKET` | Bucket for raw PDFs | `vaultdrop-raw` |
+| `VAULTDROP_S3_PROCESSED_BUCKET` | Bucket for `.txt` output | `vaultdrop-processed` |
+| `VAULTDROP_SIGNED_TTL` | Signed URL TTL | `5m` |
+| `VAULTDROP_WORKERS` | Worker concurrency | `2` |
 
-## API Overview
+Override them in `docker-compose.yml` or via your shell.
 
-### Health
+## Development notes
 
-```
-GET /healthz
-```
+- `go run ./cmd/api` launches the API if Postgres, Redis, and MinIO are already running locally.
+- `go run ./cmd/worker` starts the extractor worker (expects the same backing services).
+- Run `go test ./...` after `go mod tidy` to sync dependencies locally (the CLI environment here cannot run `go` tooling).
+- The `internal` packages contain reusable building blocks:
+  - `internal/database` – pgx connection helpers + schema bootstrap.
+  - `internal/repository` – document CRUD/status updates.
+  - `internal/s3storage` – MinIO helpers (uploads/downloads/presigned URLs).
+  - `internal/queue` – Asynq task definitions.
+  - `internal/pdf` – Plain-text extraction from PDFs.
+  - `internal/api` / `internal/worker` – HTTP and background logic.
 
-### Upload
+## VaultDrop CLI
 
-```
-POST /upload
-Content-Type: multipart/form-data
-Form field: file=@/path/to/file.pdf
-```
+A Go-based CLI (`cmd/vaultdrop`) automates common workflows.
 
-Response:
-
-```json
-{
-  "id": "a1b2c3",
-  "status": "queued"
-}
-```
-
-### File Status
-
-```
-GET /files/{id}
-```
-
-Shows metadata and lifecycle status (uploaded → scanned → queued → processing → complete).
-
-### Signed Download URL
-
-```
-POST /files/{id}/signed-url
-```
-
-Returns JSON containing a short-lived `/download` URL. The same endpoint accepts `GET` if a UI prefers a link-style action.
-
-### Download
-
-```
-GET /download?file={id}&expires={unix}&signature={hex}
-```
-
-The query parameters must come from `/files/{id}/signed-url`. Requests fail when the signature is invalid or the link is expired.
-
-## Testing
-
-Unit tests exist for the signing package:
+### Install or run ad-hoc
 
 ```bash
-go test ./internal/signing
+# Run without installing
+go run ./cmd/vaultdrop --help
+
+# Install locally (puts binary in GOPATH/bin or GOBIN)
+go install ./cmd/vaultdrop
 ```
 
-Because uploads rely on the standard library HTTP server, they can be manually exercised with curl:
+### Common commands
 
-```bash
-curl -F "file=@./sample.pdf" http://localhost:8080/upload
-```
+| Command | Purpose |
+| --- | --- |
+| `vaultdrop build` | `docker compose build` (use `--no-cache` if needed) |
+| `vaultdrop up` | `docker compose up --build -d` to start the full stack |
+| `vaultdrop down -v` | Stop stack and optionally drop volumes |
+| `vaultdrop logs -f api worker` | Tail logs from selected services |
+| `vaultdrop test` | Run `go test ./...` (add `--race`/`--cover` if desired) |
+| `vaultdrop run api` | Execute `go run ./cmd/api` outside Docker |
+| `vaultdrop run worker` | Execute `go run ./cmd/worker` outside Docker |
 
-After the upload returns an ID, poll `/files/{id}` for status changes and call `/files/{id}/signed-url` to obtain a download link once processing completes.
+All commands honor `--compose-file`/`-f` if you need to target a different Compose file.
+
+Once the worker finishes processing, you can view the resulting `.txt` inside MinIO (bucket `vaultdrop-processed`) or via the API endpoints above. This makes for a simple but convincing “resume parsing” style demo you can show off with a single compose command.
