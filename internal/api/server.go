@@ -53,7 +53,7 @@ func (s *Server) Run(ctx context.Context) error {
 		mux.HandleFunc("/documents/", s.handleDocumentRoute)
 		s.server = &http.Server{
 			Addr:    s.cfg.Address,
-			Handler: loggingMiddleware(mux),
+			Handler: corsMiddleware(loggingMiddleware(mux)),
 		}
 	})
 	go func() {
@@ -176,7 +176,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
-}
+	}
 	defer os.Remove(tmp.path)
 	defer tmp.f.Close()
 	if tmp.contentType != "application/pdf" {
@@ -312,6 +312,19 @@ func respondJSON(w http.ResponseWriter, status int, payload interface{}) {
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		log.Printf("encode response: %v", err)
 	}
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {

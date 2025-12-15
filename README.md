@@ -64,6 +64,22 @@ The containers automatically provision buckets/tables on boot. Stop everything w
 | `GET /documents/{id}/text` | Raw extracted text (200 when complete, 202 otherwise) |
 | `GET /documents/{id}/processed-url` | Signed URL pointing at the processed `.txt` object in MinIO |
 
+## Web UI
+
+A React + TypeScript frontend (no build system required) lives under `frontend/`:
+
+1. Start the stack: `docker compose up --build`.
+2. Open http://localhost:4173 to access the interface.
+3. Upload PDFs, monitor processing states, read extracted text, and download the processed `.txt` artifacts directly from the browser.
+
+The UI loads React/ReactDOM from esm.sh at runtime, so you only need to rebuild the TypeScript bundle when editing the `frontend/src` files:
+
+```bash
+tsc -p frontend
+```
+
+This command emits `frontend/dist/main.js`, which the Nginx container serves. The UI talks to the API over HTTP with CORS enabled and caches uploaded IDs locally so you can refresh or revisit the dashboard later.
+
 ## Configuration
 
 The API/worker share the same env vars (defaults shown):
@@ -83,6 +99,7 @@ The API/worker share the same env vars (defaults shown):
 | `VAULTDROP_S3_PROCESSED_BUCKET` | Bucket for `.txt` output | `vaultdrop-processed` |
 | `VAULTDROP_SIGNED_TTL` | Signed URL TTL | `5m` |
 | `VAULTDROP_WORKERS` | Worker concurrency | `2` |
+| `NGROK_AUTHTOKEN` | Optional ngrok auth token for public tunnels | unset |
 
 Override them in `docker-compose.yml` or via your shell.
 
@@ -128,3 +145,14 @@ go install ./cmd/vaultdrop
 All commands honor `--compose-file`/`-f` if you need to target a different Compose file.
 
 Once the worker finishes processing, you can view the resulting `.txt` inside MinIO (bucket `vaultdrop-processed`) or via the API endpoints above. This makes for a simple but convincing “resume parsing” style demo you can show off with a single compose command.
+
+### ngrok tunneling
+
+For remote demos you can expose the API with ngrok (already included in the compose file). Set your token and start the service:
+
+```bash
+export NGROK_AUTHTOKEN=your_token
+docker compose up ngrok
+```
+
+ngrok forwards the API container (`api:8080`) to a public URL and exposes the web inspector at http://localhost:4040. Without `NGROK_AUTHTOKEN`, the tunnel still runs but may be short-lived or limited in features.
